@@ -1,5 +1,23 @@
 import angr
 
+class TEPAnalysis(angr.Analysis):
+    """
+    Thread entry point analysis
+    """
+    def __init__(self):
+        result = set()
+        simgr = self.project.factory.simulation_manager()
+
+        class _PthreadCreate(angr.SimProcedure):
+            def run(self, newthread, attr, start_routine, arg):
+                addr = self.state.solver.eval(start_routine.to_claripy())
+                result.add(addr)
+        self.project.hook_symbol("pthread_create", _PthreadCreate())
+
+        simgr.run()
+        self.result = result
+angr.AnalysesHub.register_default("TEPAnalysis", TEPAnalysis)
+
 if __name__ == "__main__":
     import argparse
 
@@ -11,11 +29,6 @@ if __name__ == "__main__":
     print("Analyzing \"%s\"" % (args.bin))
 
     proj = angr.Project(args.bin, auto_load_libs=False)
-
-    class PthreadCreate(angr.SimProcedure):
-        def run(self, newthread, attr, start_routine, arg):
-            print("pthread create (start_routine = {})".format(start_routine))
-    proj.hook_symbol("pthread_create", PthreadCreate())
-
-    simgr = proj.factory.simulation_manager()
-    simgr.run()
+    tep = proj.analyses.TEPAnalysis()
+    for entry in tep.result:
+        print("0x%X" % (entry))
