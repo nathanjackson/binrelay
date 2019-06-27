@@ -1,3 +1,4 @@
+import copy
 import logging
 
 import angr
@@ -37,10 +38,6 @@ class ThreadEntryPoints(angr.knowledge_plugins.KnowledgeBasePlugin):
     def add(self, tep):
         self._teps.add(tep)
 
-    def copy(self):
-        o = ThreadEntryPoints(self._kb)
-        o._teps = set().union(self._teps)
-
 class TEPAnalysis(angr.Analysis):
     """
     Thread entry point analysis.
@@ -49,7 +46,7 @@ class TEPAnalysis(angr.Analysis):
     """
     def __init__(self):
         # Save sim procedures so we can restore them after the analysis.
-        orig_hooks = self.project._sim_procedures
+        orig_hooks = copy.deepcopy(self.project._sim_procedures)
 
         self.kb.register_plugin("thread_entry_points", ThreadEntryPoints())
 
@@ -63,6 +60,6 @@ class TEPAnalysis(angr.Analysis):
         simmgr.use_technique(angr.exploration_techniques.LoopSeer(bound=1))
         simmgr.run()
 
-        # Restore sim procedures
+        # Restore original sim procedures
         self.project._sim_procedures = orig_hooks
 angr.AnalysesHub.register_default("TEPAnalysis", TEPAnalysis)
