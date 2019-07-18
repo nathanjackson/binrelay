@@ -29,28 +29,33 @@ if __name__ == "__main__":
     cfg = proj.analyses.CFGEmulated(keep_state=True,
                                     context_sensitivity_level=3)
 
-    def my_bp(state):
-        print("{} @ {}".format(state.regs.rip, state.mem[0x4040d0].uint64_t))
-    state = proj.factory.entry_state()
-    state.inspect.b("instruction", instruction=0x4013ab, when=angr.BP_BEFORE,
-                    action=my_bp)
-    state.inspect.b("instruction", instruction=0x40128d, when=angr.BP_BEFORE,
-                    action=my_bp)
-    state.inspect.b("instruction", instruction=0x4012c1, when=angr.BP_BEFORE,
-                    action=my_bp)
-    state.inspect.b("instruction", instruction=0x4012b5, when=angr.BP_BEFORE,
-                    action=my_bp)
-    state.inspect.b("instruction", instruction=0x4012c6, when=angr.BP_BEFORE,
-                    action=my_bp)
-    state.inspect.b("instruction", instruction=0x4012b7, when=angr.BP_BEFORE,
-                    action=my_bp)
-    simmgr = proj.factory.simulation_manager(state)
-    #simmgr.use_technique(angr.exploration_techniques.LoopSeer(cfg=cfg, bound=1))
-    simmgr.run()
-    print("done")
-
     # Get the thread-entry points via symbolic execution.
     tep = proj.analyses.TEPAnalysis()
+
+    # Rergister a SimProcedure for lock.
+    class pthread_mutex_lock(angr.SimProcedure):
+        def run(self, mutex):
+            print("Locking: {}".format(mutex))
+    proj.hook_symbol("pthread_mutex_lock", pthread_mutex_lock())
+
+    # Register a SimProcedure for unlock.
+    class pthread_mutex_unlock(angr.SimProcedure):
+        def run(self, mutex):
+            print("Unlocking: {}".format(mutex))
+    proj.hook_symbol("pthread_mutex_unlock", pthread_mutex_unlock())
+
+    # This is binary specific, but needed for our target case.
+    @proj.hook(0x401299, length=30)
+    def skip_loop(state):
+        pass
+
+    # Perform another symbolic execution to get the lock and unlock points
+    state = proj.factory.entry_state()
+    simmgr= proj.factory.simulation_manager(state)
+    #state.inspect.b("instruction", instruction=0x401b51, when=angr.BP_BEFORE,
+    #                action=my_bp)
+    simmgr.use_technique(angr.exploration_techniques.LoopSeer(bound=1))
+    simmgr.run()
 
     for addr in tep.kb.thread_entry_points:
         # Get nodes reachable from the thread-entry point.
@@ -68,9 +73,9 @@ if __name__ == "__main__":
             #print("vex for block @ 0x%X" % (node.addr))
             #print("-------DONE---------")
 
-        pos = nx.drawing.nx_agraph.graphviz_layout(tep_graph, prog="dot")
-        nx.draw(tep_graph, pos, with_labels=True)
-        plt.show()
+#        pos = nx.drawing.nx_agraph.graphviz_layout(tep_graph, prog="dot")
+#        nx.draw(tep_graph, pos, with_labels=True)
+#        plt.show()
 
         #for node in nodes:
             #print(networkx.dfs_successors(node))
