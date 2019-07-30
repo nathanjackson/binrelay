@@ -35,22 +35,55 @@ if __name__ == "__main__":
     # Rergister a SimProcedure for lock.
     class pthread_mutex_lock(angr.SimProcedure):
         def run(self, mutex):
-            print("Locking: {}".format(mutex))
+            print("Locking on thread {}: {}".format(self.state.my_plugin.thread, mutex))
     proj.hook_symbol("pthread_mutex_lock", pthread_mutex_lock())
 
     # Register a SimProcedure for unlock.
     class pthread_mutex_unlock(angr.SimProcedure):
         def run(self, mutex):
-            print("Unlocking: {}".format(mutex))
+            print("Unlocking on thread {}: {}".format(self.state.my_plugin.thread, mutex))
     proj.hook_symbol("pthread_mutex_unlock", pthread_mutex_unlock())
 
     # This is binary specific, but needed for our target case.
-    @proj.hook(0x401299, length=30)
+    @proj.hook(0x4012aa, length=0xD)
     def skip_loop(state):
         pass
 
     # Perform another symbolic execution to get the lock and unlock points
+    class my_pthread_create(angr.procedures.posix.pthread.pthread_create):
+        def run(self, newthread, attr, start_routine, arg):
+            self.state.my_plugin.thread += 1
+            super(my_pthread_create, self).run(newthread, attr, start_routine, arg)
+    proj.hook_symbol("pthread_create", my_pthread_create())
+
+    class MyFirstPlugin(angr.SimStatePlugin):
+        def __init__(self, thread):
+            super(MyFirstPlugin, self).__init__()
+            self.thread = thread
+
+        @angr.SimStatePlugin.memo
+        def copy(self, memo):
+            return MyFirstPlugin(self.thread)
+
+#        def set_state(self, state):
+#            super(MyFirstPlugin, self).set_state(state)
+
     state = proj.factory.entry_state()
+    state.register_plugin("my_plugin", MyFirstPlugin(0))
+
+    def mem_read(state):
+        from_addr = state.inspect.mem_read_address
+        print("read from {} on thread {} at {}".format(from_addr, state.my_plugin.thread, state.regs.ip))
+
+    def mem_write(state):
+        to_addr = state.inspect.mem_write_address
+        print("write to {} on thread {} at {}".format(to_addr,
+                                                      state.my_plugin.thread,
+                                                      state.regs.ip))
+
+    state.inspect.b("mem_read", when=angr.BP_AFTER, action=mem_read)
+    state.inspect.b("mem_write", when=angr.BP_AFTER, action=mem_write)
+
     simmgr= proj.factory.simulation_manager(state)
     #state.inspect.b("instruction", instruction=0x401b51, when=angr.BP_BEFORE,
     #                action=my_bp)
@@ -73,9 +106,9 @@ if __name__ == "__main__":
             #print("vex for block @ 0x%X" % (node.addr))
             #print("-------DONE---------")
 
-#        pos = nx.drawing.nx_agraph.graphviz_layout(tep_graph, prog="dot")
-#        nx.draw(tep_graph, pos, with_labels=True)
-#        plt.show()
+        pos = nx.drawing.nx_agraph.graphviz_layout(tep_graph, prog="dot")
+        nx.draw(tep_graph, pos, with_labels=True)
+        plt.show()
 
         #for node in nodes:
             #print(networkx.dfs_successors(node))
