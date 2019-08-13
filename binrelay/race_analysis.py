@@ -6,7 +6,7 @@ import angr
 from .utils import pthread_exit
 
 logger = logging.getLogger(name=__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 class ThreadInfoPlugin(angr.SimStatePlugin):
     """
@@ -28,17 +28,20 @@ class _pthread_create(angr.procedures.posix.pthread.pthread_create):
     ThreadInfoPlugin.
     """
     def run(self, newthread, attr, start_routine, arg):
-        self.state.thread_info.sim_thread_id += 1
-        logger.info("Starting Simulated Thread Id = %d" %
-                    (self.state.thread_info.sim_thread_id))
+        from_thread = self.state.thread_info.sim_thread_id
+        to_thread = self.state.thread_info.sim_thread_id + 1
+        logger.debug("Thread %d -> %d" % (from_thread, to_thread))
+        logger.debug(self.state.callstack)
+        self.state.thread_info.sim_thread_id = to_thread
         super(_pthread_create, self).run(newthread, attr, start_routine, arg)
+        self.state.thread_info.sim_thread_id = from_thread
 
 class _pthread_mutex_lock(angr.SimProcedure):
     """
     A simprocedure that is executed when a lock (mutex) is taken.
     """
     def run(self, mutex):
-        logger.info("Thread %d is locking mutex @ %s" %
+        logger.debug("Thread %d is locking mutex @ %s" %
                     (self.state.thread_info.sim_thread_id, mutex))
 
 class _pthread_mutex_unlock(angr.SimProcedure):
@@ -46,18 +49,18 @@ class _pthread_mutex_unlock(angr.SimProcedure):
     A simprocedure that is executed when a lock (mutex) is released.
     """
     def run(self, mutex):
-        logger.info("Thread %d is releasing mutex @ %s" %
+        logger.debug("Thread %d is releasing mutex @ %s" %
                     (self.state.thread_info.sim_thread_id, mutex))
 
 def _mem_read_callback(state):
     from_addr = state.inspect.mem_read_address
-    logger.info("Thread %d is reading at %s" %
-                (state.thread_info.sim_thread_id, from_addr))
+    logger.debug("Thread %d is reading from %s at %s" %
+                (state.thread_info.sim_thread_id, from_addr, state.ip))
 
 def _mem_write_callback(state):
     to_addr = state.inspect.mem_write_address
-    logger.info("Thread %d is writing at %s" %
-                (state.thread_info.sim_thread_id, to_addr))
+    logger.debug("Thread %d is writing to %s at %s" %
+                (state.thread_info.sim_thread_id, to_addr, state.ip))
 
 class RaceFinder(angr.Analysis):
     """
