@@ -14,12 +14,16 @@ class ThreadInfoPlugin(angr.SimStatePlugin):
     """
     def __init__(self):
         super(ThreadInfoPlugin, self).__init__()
-        self.sim_thread_id = 0
+        self.current_thread_id = 0
+        self.next_thread_id = 1
+        self.prev_thread_id = None
 
     @angr.SimStatePlugin.memo
     def copy(self, memo):
         result = ThreadInfoPlugin()
-        result.sim_thread_id = self.sim_thread_id
+        result.current_thread_id = self.current_thread_id
+        result.next_thread_id = self.next_thread_id
+        result.prev_thread_id = self.prev_thread_id
         return result
 
 class _pthread_create(angr.procedures.posix.pthread.pthread_create):
@@ -28,13 +32,18 @@ class _pthread_create(angr.procedures.posix.pthread.pthread_create):
     ThreadInfoPlugin.
     """
     def run(self, newthread, attr, start_routine, arg):
-        from_thread = self.state.thread_info.sim_thread_id
-        to_thread = self.state.thread_info.sim_thread_id + 1
-        logger.debug("Thread %d -> %d" % (from_thread, to_thread))
-        logger.debug(self.state.callstack)
-        self.state.thread_info.sim_thread_id = to_thread
+        self.state.thread_info.prev_thread_id = self.state.thread_info.current_thread_id
+        self.state.thread_info.current_thread_id = self.state.thread_info.next_thread_id
+        self.state.thread_info.next_thread_id += 1
+
+        logger.debug("Thread %d -> %d" %
+                     (self.state.thread_info.prev_thread_id,
+                      self.state.thread_info.current_thread_id))
         super(_pthread_create, self).run(newthread, attr, start_routine, arg)
-        self.state.thread_info.sim_thread_id = from_thread
+
+        prev = self.state.thread_info.current_thread_id
+        self.state.thread_info.current_thread_id = self.state.thread_info.prev_thread_id
+        self.state.thread_info.prev_thread_id = prev
 
 class _pthread_mutex_lock(angr.SimProcedure):
     """
@@ -42,7 +51,7 @@ class _pthread_mutex_lock(angr.SimProcedure):
     """
     def run(self, mutex):
         logger.debug("Thread %d is locking mutex @ %s" %
-                    (self.state.thread_info.sim_thread_id, mutex))
+                    (self.state.thread_info.current_thread_id, mutex))
 
 class _pthread_mutex_unlock(angr.SimProcedure):
     """
@@ -50,17 +59,17 @@ class _pthread_mutex_unlock(angr.SimProcedure):
     """
     def run(self, mutex):
         logger.debug("Thread %d is releasing mutex @ %s" %
-                    (self.state.thread_info.sim_thread_id, mutex))
+                    (self.state.thread_info.current_thread_id, mutex))
 
 def _mem_read_callback(state):
     from_addr = state.inspect.mem_read_address
     logger.debug("Thread %d is reading from %s at %s" %
-                (state.thread_info.sim_thread_id, from_addr, state.ip))
+                (state.thread_info.current_thread_id, from_addr, state.ip))
 
 def _mem_write_callback(state):
     to_addr = state.inspect.mem_write_address
     logger.debug("Thread %d is writing to %s at %s" %
-                (state.thread_info.sim_thread_id, to_addr, state.ip))
+                (state.thread_info.current_thread_id, to_addr, state.ip))
 
 class RaceFinder(angr.Analysis):
     """
