@@ -8,6 +8,9 @@ from .utils import pthread_exit
 logger = logging.getLogger(name=__name__)
 logger.setLevel(logging.DEBUG)
 
+# (PC, Thread ID) -> { (address, size, rw, locks) }
+meta = { }
+
 class ThreadInfoPlugin(angr.SimStatePlugin):
     """
     A state plugin for keeping track of simulated threads.
@@ -18,12 +21,15 @@ class ThreadInfoPlugin(angr.SimStatePlugin):
         self.next_thread_id = 1
         self.prev_thread_id = None
 
+        self.locks_held = set()
+
     @angr.SimStatePlugin.memo
     def copy(self, memo):
         result = ThreadInfoPlugin()
         result.current_thread_id = self.current_thread_id
         result.next_thread_id = self.next_thread_id
         result.prev_thread_id = self.prev_thread_id
+        result.locks_held = copy.deepcopy(self.locks_held)
         return result
 
 class _pthread_create(angr.procedures.posix.pthread.pthread_create):
@@ -52,6 +58,8 @@ class _pthread_mutex_lock(angr.SimProcedure):
     def run(self, mutex):
         logger.debug("Thread %d is locking mutex @ %s" %
                     (self.state.thread_info.current_thread_id, mutex))
+        mutex_address = self.state.solver.eval(mutex.to_claripy())
+        self.state.thread_info.locks_held.add(mutex_address)
 
 class _pthread_mutex_unlock(angr.SimProcedure):
     """
@@ -60,16 +68,46 @@ class _pthread_mutex_unlock(angr.SimProcedure):
     def run(self, mutex):
         logger.debug("Thread %d is releasing mutex @ %s" %
                     (self.state.thread_info.current_thread_id, mutex))
+        mutex_address = self.state.solver.eval(mutex.to_claripy())
+        self.state.thread_info.locks_held.remove(mutex_address)
 
 def _mem_read_callback(state):
     from_addr = state.inspect.mem_read_address
     logger.debug("Thread %d is reading from %s at %s" %
                 (state.thread_info.current_thread_id, from_addr, state.ip))
+    logger.debug("Thread %d Locks held = %s" % (state.thread_info.current_thread_id, state.thread_info.locks_held))
+
+    pc = state.solver.eval(state.ip)
+    tid = state.thread_info.current_thread_id
+    key = (pc, tid)
+
+    length = state.inspect.mem_read_length
+    rw = "read"
+    locks = copy.deepcopy(state.thread_info.locks_held)
+    value = (state.solver.eval(from_addr), length, rw, locks)
+
+    if key not in meta:
+        meta[key] = []
+    meta[key].append(value)
 
 def _mem_write_callback(state):
     to_addr = state.inspect.mem_write_address
-    logger.debug("Thread %d is writing to %s at %s" %
+    logger.debug("Thread %d is writing from %s at %s" %
                 (state.thread_info.current_thread_id, to_addr, state.ip))
+    logger.debug("Thread %d Locks held = %s" % (state.thread_info.current_thread_id, state.thread_info.locks_held))
+
+    pc = state.solver.eval(state.ip)
+    tid = state.thread_info.current_thread_id
+    key = (pc, tid)
+
+    length = state.inspect.mem_write_length
+    rw = "write"
+    locks = copy.deepcopy(state.thread_info.locks_held)
+    value = (state.solver.eval(to_addr), length, rw, locks)
+
+    if key not in meta:
+        meta[key] = []
+    meta[key].append(value)
 
 class RaceFinder(angr.Analysis):
     """
@@ -104,6 +142,9 @@ class RaceFinder(angr.Analysis):
         # able to execute the loop bodies to see their reads and writes.
         simmgr.use_technique(angr.exploration_techniques.LoopSeer(bound=1))
         simmgr.run()
+
+        for key in meta.keys():
+            print("%s: %s" % (key, meta[key]))
 
         # Restore sim procedures
         self.project._sim_procedures = orig_hooks
