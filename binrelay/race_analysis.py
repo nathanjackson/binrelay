@@ -74,9 +74,15 @@ class _pthread_create(angr.procedures.posix.pthread.pthread_create):
     ThreadInfoPlugin.
     """
     def run(self, newthread, attr, start_routine, arg):
+        thread = self.state.solver.eval(newthread)
+        
         self.state.thread_info.prev_thread_id = self.state.thread_info.current_thread_id
         self.state.thread_info.current_thread_id = self.state.thread_info.next_thread_id
         self.state.thread_info.next_thread_id += 1
+
+        logger.debug("Thread 0x%X = ID %d", thread,
+                     self.state.thread_info.current_thread_id)
+        self.state.mem[thread].uint64_t = self.state.thread_info.current_thread_id
 
         logger.debug("Thread %d -> %d" %
                      (self.state.thread_info.prev_thread_id,
@@ -86,6 +92,10 @@ class _pthread_create(angr.procedures.posix.pthread.pthread_create):
         prev = self.state.thread_info.current_thread_id
         self.state.thread_info.current_thread_id = self.state.thread_info.prev_thread_id
         self.state.thread_info.prev_thread_id = prev
+
+class _pthread_join(angr.SimProcedure):
+    def run(self, thread, retval):
+        logger.debug("Join %s", thread)
 
 class _pthread_mutex_lock(angr.SimProcedure):
     """
@@ -162,6 +172,7 @@ class RaceFinder(angr.Analysis):
         self.project.hook_symbol("pthread_mutex_unlock",
                                  _pthread_mutex_unlock())
         self.project.hook_symbol("pthread_exit", pthread_exit())
+        self.project.hook_symbol("pthread_join", _pthread_join())
 
         # Setup the symbolic execution.
         state = self.project.factory.entry_state()
