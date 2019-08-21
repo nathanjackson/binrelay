@@ -8,57 +8,44 @@ from .utils import pthread_exit
 logger = logging.getLogger(name=__name__)
 logger.setLevel(logging.DEBUG)
 
-class ProgramPoint(object):
-    def __init__(self, pc, tid):
-        self.pc = pc
-        self.tid = tid
+READ = "read"
+WRITE = "write"
 
-    def collides(self, other):
-        return self.tid != other.tid
+class Shadow(object):
+    """
+    A shadow memory for tracking memory accesses during symbolic execution.
 
-    def __repr__(self):
-        return "<ProgramPoint {0x%X, %d}>" % (self.pc, self.tid)
+    Address -> { (tid, ip, lockset) } 
+    """
+    def __init__(self):
+        self._data = {}
 
-    def __hash__(self):
-        return hash(self.pc) ^ hash(self.tid)
+    def add_access(self, start_address, size, tid, ip, rw, lockset):
+        for i in range(size):
+            address  = start_address + i
+            if address not in self._data:
+                self._data[address] =  set()
 
-    def __eq__(self, other ):
-        return self.pc == other.pc and \
-               self.tid == other.tid
+            self._data[address].add((tid, ip, rw, lockset))
 
-class MemoryAccess(object):
-    def __init__(self, address, size, rw):
-        self.address = address
-        self.size = size
-        self.rw = rw
+    def find_races(self):
+        for address in self._data.keys():
+            accesses0 = list(self._data[address])
+            accesses1 = accesses0[1:]
 
-    def overlaps(other):
-        x1 = self.address
-        y1 = other.address
-        x2 = self.address + self.size - 1
-        y2 = other.address + other.size - 1
-        return x1 <= y2 and y1 <= x2
+            for acc0 in accesses0:
+                for acc1 in accesses1:
+                    if acc0[0] == acc1[0]:
+                        continue
+                    if READ == acc0[2] and READ == acc1[2]:
+                        continue
+                    if 0 < len(acc0[3].intersection(acc1[3])):
+                        continue
+                    logger.info("Possible Race on 0x%X (%s <-> %s)" % (address,
+                                                                      acc0,
+                                                                       acc1))
 
-    def __hash__(self):
-        return hash(self.address) ^ hash(self.size) ^ hash(self.rw)
-
-    def __eq__(self, other):
-        return self.address == other.address and \
-               self.size == other.size and \
-               self.rw == other.rw
-
-    def __repr__(self):
-        return "<MemoryAccess {0x%X, %d, %s}>" % (self.address, self.size,
-                                                  self.rw)
-
-# (PC, Thread ID) -> { (address, size, rw) }
-# mem_accesses = { }
-
-# (address, size, rw) -> (PC, Thread ID)
-mem_accesses = { }
-
-# (PC, Thread ID) -> { locks }
-locksets = { }
+shad = Shadow()
 
 class ThreadInfoPlugin(angr.SimStatePlugin):
     """
@@ -121,70 +108,42 @@ class _pthread_mutex_unlock(angr.SimProcedure):
         self.state.thread_info.locks_held.remove(mutex_address)
 
 def _mem_read_callback(state):
+    ip = state.ip
     from_addr = state.inspect.mem_read_address
+    length = state.inspect.mem_read_length
     logger.debug("Thread %d is reading from %s at %s" %
                 (state.thread_info.current_thread_id, from_addr, state.ip))
-    logger.debug("Thread %d Locks held = %s" % (state.thread_info.current_thread_id, state.thread_info.locks_held))
+    logger.debug("Thread %d Locks held = %s" %
+                 (state.thread_info.current_thread_id, state.thread_info.locks_held))
 
-    pp = ProgramPoint(state.solver.eval(state.ip),
-                      state.thread_info.current_thread_id)
-
-    length = state.inspect.mem_read_length
-    if type(length) != int:
+    if int != type(from_addr):
+        from_addr = state.solver.eval(from_addr)
+    if int != type(length):
         length = state.solver.eval(length)
-    access = MemoryAccess(state.solver.eval(from_addr), length, "read")
-    if access not in mem_accesses:
-        mem_accesses[access] = set()
-    mem_accesses[access].add(pp)
+    if int != type(ip):
+        ip = state.solver.eval(ip)
 
-#    pc = state.solver.eval(state.ip)
-#    tid = state.thread_info.current_thread_id
-#    key = (pc, tid)
-#
-#    length = state.inspect.mem_read_length
-#    rw = "read"
-#    value = (state.solver.eval(from_addr), length, rw)
-#
-#    if key not in mem_accesses:
-#        mem_accesses[key] = set()
-#    mem_accesses[key].add(value)
-#
-#    if key not in locksets:
-#        locksets[key] = set()
-#    locksets[key] = locksets[key].union(state.thread_info.locks_held)
+    shad.add_access(from_addr, length, state.thread_info.current_thread_id, ip,
+                    READ, frozenset(state.thread_info.locks_held))
 
 def _mem_write_callback(state):
+    ip = state.ip
     to_addr = state.inspect.mem_write_address
+    length = state.inspect.mem_write_length
     logger.debug("Thread %d is writing from %s at %s" %
                 (state.thread_info.current_thread_id, to_addr, state.ip))
-    logger.debug("Thread %d Locks held = %s" % (state.thread_info.current_thread_id, state.thread_info.locks_held))
+    logger.debug("Thread %d Locks held = %s" %
+                 (state.thread_info.current_thread_id, state.thread_info.locks_held))
 
-    pp = ProgramPoint(state.solver.eval(state.ip),
-                      state.thread_info.current_thread_id)
-
-    length = state.inspect.mem_write_length
-    if type(length) != int:
+    if int != type(to_addr):
+        to_addr = state.solver.eval(to_addr)
+    if int != type(length):
         length = state.solver.eval(length)
-    access = MemoryAccess(state.solver.eval(to_addr), length, "write")
-    if access not in mem_accesses:
-        mem_accesses[access] = set()
-    mem_accesses[access].add(pp)
+    if int != type(ip):
+        ip = state.solver.eval(ip)
 
-#    pc = state.solver.eval(state.ip)
-#    tid = state.thread_info.current_thread_id
-#    key = (pc, tid)
-#
-#    length = state.inspect.mem_write_length
-#    rw = "write"
-#    value = (state.solver.eval(to_addr), length, rw)
-#
-#    if key not in mem_accesses:
-#        mem_accesses[key] = set()
-#    mem_accesses[key].add(value)
-#
-#    if key not in locksets:
-#        locksets[key] = set()
-#    locksets[key] = locksets[key].union(state.thread_info.locks_held)
+    shad.add_access(to_addr, length, state.thread_info.current_thread_id, ip,
+                    WRITE, frozenset(state.thread_info.locks_held))
 
 class RaceFinder(angr.Analysis):
     """
@@ -220,16 +179,7 @@ class RaceFinder(angr.Analysis):
         simmgr.use_technique(angr.exploration_techniques.LoopSeer(bound=1))
         simmgr.run()
 
-        for key in mem_accesses.keys():
-            xs = list(mem_accesses[key])
-            ys = xs[1:]
-            for xpp in xs:
-                for ypp in ys:
-                    if xpp.collides(ypp):
-                        logger.info("Possible Race on 0x%X: xpp = %s, ypp = %s" % (key.address, xpp, ypp))
-
-#        for key in locksets.keys():
-#            print("%s: %s" % (key, locksets[key]))
+        shad.find_races()
 
         # Restore sim procedures
         self.project._sim_procedures = orig_hooks
