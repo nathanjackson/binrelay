@@ -20,13 +20,14 @@ class Shadow(object):
     def __init__(self):
         self._data = {}
 
-    def add_access(self, start_address, size, tid, ip, rw, lockset):
+    def add_access(self, start_address, size, tid, ip, rw, lockset,
+                   active_threads):
         for i in range(size):
             address  = start_address + i
             if address not in self._data:
                 self._data[address] =  set()
 
-            self._data[address].add((tid, ip, rw, lockset))
+            self._data[address].add((tid, ip, rw, lockset, active_threads))
 
     def find_races(self):
         for address in self._data.keys():
@@ -40,6 +41,8 @@ class Shadow(object):
                     if READ == acc0[2] and READ == acc1[2]:
                         continue
                     if 0 < len(acc0[3].intersection(acc1[3])):
+                        continue
+                    if not ((acc0[0] in acc1[4]) and (acc1[0] in acc0[4])):
                         continue
                     logger.info("Possible Race on 0x%X (%s <-> %s)" % (address,
                                                                       acc0,
@@ -59,6 +62,8 @@ class ThreadInfoPlugin(angr.SimStatePlugin):
 
         self.locks_held = set()
 
+        self.active_threads = set([0])
+
     @angr.SimStatePlugin.memo
     def copy(self, memo):
         result = ThreadInfoPlugin()
@@ -66,6 +71,13 @@ class ThreadInfoPlugin(angr.SimStatePlugin):
         result.next_thread_id = self.next_thread_id
         result.prev_thread_id = self.prev_thread_id
         result.locks_held = copy.deepcopy(self.locks_held)
+        # Notice that we don't perform a deep copy of the active threads. This
+        # is because the symbolic execution is executing the "threads"
+        # sequentially. We allow some states to share the same active thread
+        # set. When a thread join occurs, we then make a copy. The idea is that
+        # threads that could possibly execute simultaneously share an active
+        # thread set.
+        result.active_threads = self.active_threads
         return result
 
 class _pthread_create(angr.procedures.posix.pthread.pthread_create):
@@ -79,6 +91,8 @@ class _pthread_create(angr.procedures.posix.pthread.pthread_create):
         self.state.thread_info.prev_thread_id = self.state.thread_info.current_thread_id
         self.state.thread_info.current_thread_id = self.state.thread_info.next_thread_id
         self.state.thread_info.next_thread_id += 1
+
+        self.state.thread_info.active_threads.add(self.state.thread_info.current_thread_id)
 
         logger.debug("Thread 0x%X = ID %d", thread,
                      self.state.thread_info.current_thread_id)
@@ -96,6 +110,10 @@ class _pthread_create(angr.procedures.posix.pthread.pthread_create):
 class _pthread_join(angr.SimProcedure):
     def run(self, thread, retval):
         logger.debug("Join %s", thread)
+        # Perform a deep copy of the active thread set and then remove the
+        # provided thread from it.
+        self.state.thread_info.active_threads = copy.deepcopy(self.state.thread_info.active_threads)
+        self.state.thread_info.active_threads.remove(self.state.solver.eval(thread.to_claripy()))
 
 class _pthread_mutex_lock(angr.SimProcedure):
     """
@@ -125,6 +143,7 @@ def _mem_read_callback(state):
                 (state.thread_info.current_thread_id, from_addr, state.ip))
     logger.debug("Thread %d Locks held = %s" %
                  (state.thread_info.current_thread_id, state.thread_info.locks_held))
+    logger.debug("Active Threads = %s" % (state.thread_info.active_threads))
 
     if int != type(from_addr):
         from_addr = state.solver.eval(from_addr)
@@ -134,7 +153,8 @@ def _mem_read_callback(state):
         ip = state.solver.eval(ip)
 
     shad.add_access(from_addr, length, state.thread_info.current_thread_id, ip,
-                    READ, frozenset(state.thread_info.locks_held))
+                    READ, frozenset(state.thread_info.locks_held),
+                    frozenset(state.thread_info.active_threads))
 
 def _mem_write_callback(state):
     ip = state.ip
@@ -144,6 +164,7 @@ def _mem_write_callback(state):
                 (state.thread_info.current_thread_id, to_addr, state.ip))
     logger.debug("Thread %d Locks held = %s" %
                  (state.thread_info.current_thread_id, state.thread_info.locks_held))
+    logger.debug("Active Threads = %s" % (state.thread_info.active_threads))
 
     if int != type(to_addr):
         to_addr = state.solver.eval(to_addr)
@@ -153,7 +174,8 @@ def _mem_write_callback(state):
         ip = state.solver.eval(ip)
 
     shad.add_access(to_addr, length, state.thread_info.current_thread_id, ip,
-                    WRITE, frozenset(state.thread_info.locks_held))
+                    WRITE, frozenset(state.thread_info.locks_held),
+                    frozenset(state.thread_info.active_threads))
 
 class RaceFinder(angr.Analysis):
     """
