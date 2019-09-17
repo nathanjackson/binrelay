@@ -29,8 +29,12 @@ class Shadow(object):
 
             self._data[address].add((tid, ip, rw, lockset, active_threads))
 
-    def find_races(self):
+    def find_races(self, ranges):
         for address in self._data.keys():
+            if True == min([address < rng[0] or rng[0]+rng[1]-1 < address for rng in
+                            ranges]):
+                continue
+
             accesses0 = list(self._data[address])
             accesses1 = accesses0[1:]
 
@@ -47,7 +51,6 @@ class Shadow(object):
                     logger.info("Possible Race on 0x%X (%s <-> %s)" % (address,
                                                                       acc0,
                                                                        acc1))
-
 shad = Shadow()
 
 class ThreadInfoPlugin(angr.SimStatePlugin):
@@ -197,6 +200,10 @@ class RaceFinder(angr.Analysis):
         self.project.hook_symbol("pthread_join", _pthread_join())
 
         # Setup the symbolic execution.
+        checked_ranges = set()
+        for section in self.project.loader.main_object.sections:
+            if section.name == ".data" or section.name == ".bss":
+                checked_ranges.add((section.vaddr, section.memsize))
         state = self.project.factory.entry_state()
         state.register_plugin("thread_info", ThreadInfoPlugin())
 
@@ -212,11 +219,10 @@ class RaceFinder(angr.Analysis):
         simmgr.use_technique(angr.exploration_techniques.LoopSeer(bound=1))
         simmgr.run()
 
-        shad.find_races()
+        shad.find_races(checked_ranges)
 
         # Restore sim procedures
         self.project._sim_procedures = orig_hooks
-
 
 # Register the RaceFinder with angr.
 angr.AnalysesHub.register_default("RaceFinder", RaceFinder)
