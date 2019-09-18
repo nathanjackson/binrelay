@@ -6,7 +6,7 @@ import angr
 from .utils import pthread_exit
 
 logger = logging.getLogger(name=__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 READ = "read"
 WRITE = "write"
@@ -216,7 +216,7 @@ class RaceFinder(angr.Analysis):
         simmgr = self.project.factory.simulation_manager(state)
         # XXX: We probably don't want to use LoopSeer because we need to be
         # able to execute the loop bodies to see their reads and writes.
-        simmgr.use_technique(angr.exploration_techniques.LoopSeer(bound=1))
+        simmgr.use_technique(angr.exploration_techniques.Spiller())
         simmgr.run()
 
         shad.find_races(checked_ranges)

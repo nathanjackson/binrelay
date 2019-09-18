@@ -20,14 +20,4 @@ if __name__ == "__main__":
 
     project = angr.Project(args.binary, auto_load_libs=False)
 
-    # Note the following hooks are specific to the global int 01 binary.
-
-    @project.hook(0x4012aa, length=0xD)
-    def skip_good_loop(state):
-        pass
-
-    @project.hook(0x401266, length=0xD)
-    def skip_bad_loop(state):
-        pass
-
     race_finder = project.analyses.RaceFinder()
