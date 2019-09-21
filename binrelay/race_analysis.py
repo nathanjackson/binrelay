@@ -117,6 +117,7 @@ class _pthread_join(angr.SimProcedure):
         # provided thread from it.
         self.state.thread_info.active_threads = copy.deepcopy(self.state.thread_info.active_threads)
         self.state.thread_info.active_threads.remove(self.state.solver.eval(thread.to_claripy()))
+        self.ret(0)
 
 class _pthread_mutex_lock(angr.SimProcedure):
     """
