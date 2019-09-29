@@ -19,6 +19,7 @@ class Shadow(object):
     """
     def __init__(self):
         self._data = {}
+        self._acc_meta = {}
 
     def add_access(self, start_address, size, tid, ip, rw, lockset,
                    active_threads):
@@ -27,7 +28,8 @@ class Shadow(object):
             if address not in self._data:
                 self._data[address] =  set()
 
-            self._data[address].add((tid, ip, rw, lockset, active_threads))
+            self._data[address].add((tid, ip, rw, lockset))
+            self._acc_meta[(address, tid, ip, rw, lockset)] = active_threads
 
     def find_races(self, ranges):
         for address in self._data.keys():
@@ -46,7 +48,15 @@ class Shadow(object):
                         continue
                     if 0 < len(acc0[3].intersection(acc1[3])):
                         continue
-                    if not ((acc0[0] in acc1[4]) and (acc1[0] in acc0[4])):
+
+                    active_threads0 = self._acc_meta[(address, acc0[0],
+                                                      acc0[1], acc0[2],
+                                                      acc0[3])]
+                    active_threads1 = self._acc_meta[(address, acc1[0],
+                                                      acc1[1], acc1[2],
+                                                      acc1[3])]
+                    if not ((acc0[0] in active_threads1) and (acc1[0] in
+                                                              active_threads0)):
                         continue
                     logger.info("Possible Race on 0x%X (%s <-> %s)" % (address,
                                                                       acc0,
