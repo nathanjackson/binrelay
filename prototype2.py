@@ -178,7 +178,23 @@ def mem_write_callback(state):
                 state.thread_info.current_thread_id, ip, to_addr,
                 state.thread_info.locks_held, state.thread_info.cn)
 
-p = angr.Project("samples/sample01", auto_load_libs=False)
+#p = angr.Project("samples/sample01", auto_load_libs=False)
+p = angr.Project("juliet-cwe366/CWE366_Race_Condition_Within_Thread__global_int_01.out",
+             auto_load_libs=False)
+
+def test_ret(state):
+    logger.info("before %s", state.callstack)
+    #logger.info("return target %s", state.callstack.current_return_target)
+    state.callstack.ret()
+    state.ip = state.callstack.current_return_target
+    #logger.info("after %s", state.callstack)
+    #logger.info("return target %s", state.callstack.current_return_target)
+def dummy(state):
+    pass
+p.hook(0x4019b2, hook=test_ret)
+p.hook(0x4012aa, length=0xD, hook=dummy)
+p.hook(0x401266, length=0xD, hook=dummy)
+
 p.hook_symbol("pthread_create", proto_pthread_create())
 p.hook_symbol("pthread_join", proto_pthread_join())
 p.hook_symbol("pthread_mutex_lock", _pthread_mutex_lock())
