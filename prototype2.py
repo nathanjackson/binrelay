@@ -136,11 +136,13 @@ def mem_read_callback(state):
     if int != type(ip):
         ip = state.solver.eval(ip)
 
-    access = (state.thread_info.current_thread_id, ip, from_addr, "read",
-              frozenset(state.thread_info.locks_held), state.thread_info.cn)
-    if from_addr not in state.thread_info.accesses:
-        state.thread_info.accesses[from_addr] = set()
-    state.thread_info.accesses[from_addr].add(access)
+    for i in range(length):
+        addr = from_addr + i
+        access = (state.thread_info.current_thread_id, ip, addr, "read",
+                  frozenset(state.thread_info.locks_held), state.thread_info.cn)
+        if addr not in state.thread_info.accesses:
+            state.thread_info.accesses[addr] = set()
+        state.thread_info.accesses[addr].add(access)
     #state.thread_info.accesses.add(access)
 
     logger.info("thread=%d pc=0x%X addr=0x%X rw=r locks=%s tsn=%s",
@@ -164,18 +166,19 @@ def mem_write_callback(state):
     if int != type(ip):
         ip = state.solver.eval(ip)
 
-    access = (state.thread_info.current_thread_id, ip, to_addr, "write",
-              frozenset(state.thread_info.locks_held), state.thread_info.cn)
-    if to_addr not in state.thread_info.accesses:
-        state.thread_info.accesses[to_addr] = set()
-    state.thread_info.accesses[to_addr].add(access)
+    for i in range(length):
+        addr = to_addr+ i
+        access = (state.thread_info.current_thread_id, ip, addr, "write", frozenset(state.thread_info.locks_held), state.thread_info.cn)
+        if addr not in state.thread_info.accesses:
+            state.thread_info.accesses[addr] = set()
+        state.thread_info.accesses[addr].add(access)
 #    state.thread_info.accesses.add(access)
 
     logger.info("thread=%d pc=0x%X addr=0x%X rw=w locks=%s tsn=%s",
                 state.thread_info.current_thread_id, ip, to_addr,
                 state.thread_info.locks_held, state.thread_info.cn)
 
-p = angr.Project("samples/sample03", auto_load_libs=False)
+p = angr.Project("samples/sample01", auto_load_libs=False)
 p.hook_symbol("pthread_create", proto_pthread_create())
 p.hook_symbol("pthread_join", proto_pthread_join())
 p.hook_symbol("pthread_mutex_lock", _pthread_mutex_lock())
@@ -244,6 +247,8 @@ for st in simgr.deadended:
             if a0[0] == a1[0]:
                 continue
             if a0[3] == "read" and a1[3] == "read":
+                continue
+            if len(a0[4].intersection(a1[4])) > 0:
                 continue
 
 #                logger.info("thread=%d, pc=0x%X addr=0x%X rw=%s locks=%s tsn=%s",
