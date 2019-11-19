@@ -1,7 +1,10 @@
 import copy
+import itertools
 import logging
 
 import angr
+
+import networkx as nx
 
 from .utils import pthread_exit
 
@@ -11,123 +14,89 @@ logger.setLevel(logging.INFO)
 READ = "read"
 WRITE = "write"
 
-class Shadow(object):
-    """
-    A shadow memory for tracking memory accesses during symbolic execution.
-
-    Address -> { (tid, ip, lockset) } 
-    """
-    def __init__(self):
-        self._data = {}
-        self._acc_meta = {}
-
-    def add_access(self, start_address, size, tid, ip, rw, lockset,
-                   active_threads):
-        for i in range(size):
-            address  = start_address + i
-            if address not in self._data:
-                self._data[address] =  set()
-
-            self._data[address].add((tid, ip, rw, lockset))
-            self._acc_meta[(address, tid, ip, rw, lockset)] = active_threads
-
-    def find_races(self, ranges):
-        for address in self._data.keys():
-            if True == min([address < rng[0] or rng[0]+rng[1]-1 < address for rng in
-                            ranges]):
-                continue
-
-            accesses0 = list(self._data[address])
-            accesses1 = accesses0[1:]
-
-            for acc0 in accesses0:
-                for acc1 in accesses1:
-                    if acc0[0] == acc1[0]:
-                        continue
-                    if READ == acc0[2] and READ == acc1[2]:
-                        continue
-                    if 0 < len(acc0[3].intersection(acc1[3])):
-                        continue
-
-                    active_threads0 = self._acc_meta[(address, acc0[0],
-                                                      acc0[1], acc0[2],
-                                                      acc0[3])]
-                    active_threads1 = self._acc_meta[(address, acc1[0],
-                                                      acc1[1], acc1[2],
-                                                      acc1[3])]
-                    if not ((acc0[0] in active_threads1) and (acc1[0] in
-                                                              active_threads0)):
-                        continue
-                    logger.info("Possible Race on 0x%X (%s <-> %s)" % (address,
-                                                                      acc0,
-                                                                       acc1))
-shad = Shadow()
-
 class ThreadInfoPlugin(angr.SimStatePlugin):
-    """
-    A state plugin for keeping track of simulated threads.
-    """
     def __init__(self):
         super(ThreadInfoPlugin, self).__init__()
+
+        self.prev_thread_id = None
         self.current_thread_id = 0
         self.next_thread_id = 1
-        self.prev_thread_id = None
+
+        self.TG = nx.DiGraph()
+        self.cn = frozenset([0])
+        self.TG.add_node(self.cn)
 
         self.locks_held = set()
 
-        self.active_threads = set([0])
+        self.accesses = {}
+        #self.accesses = set()
 
     @angr.SimStatePlugin.memo
     def copy(self, memo):
         result = ThreadInfoPlugin()
+        result.prev_thread_id = self.prev_thread_id
         result.current_thread_id = self.current_thread_id
         result.next_thread_id = self.next_thread_id
-        result.prev_thread_id = self.prev_thread_id
+
+        result.TG = copy.deepcopy(self.TG)
+        result.cn = copy.deepcopy(self.cn)
+
         result.locks_held = copy.deepcopy(self.locks_held)
-        # Notice that we don't perform a deep copy of the active threads. This
-        # is because the symbolic execution is executing the "threads"
-        # sequentially. We allow some states to share the same active thread
-        # set. When a thread join occurs, we then make a copy. The idea is that
-        # threads that could possibly execute simultaneously share an active
-        # thread set.
-        result.active_threads = self.active_threads
+
+        result.accesses = copy.deepcopy(self.accesses)
         return result
 
-class _pthread_create(angr.procedures.posix.pthread.pthread_create):
+class _pthread_create(angr.SimProcedure):
     """
-    A subclassed pthread_create sim procedure that updates the
-    ThreadInfoPlugin.
+    A Sim Procedure for pthread_create
     """
-    def run(self, newthread, attr, start_routine, arg):
-        thread = self.state.solver.eval(newthread)
-        
+
+    def run(self, nt, attr, start_routine, arg):
+        thread = self.state.solver.eval(nt)
+
         self.state.thread_info.prev_thread_id = self.state.thread_info.current_thread_id
         self.state.thread_info.current_thread_id = self.state.thread_info.next_thread_id
         self.state.thread_info.next_thread_id += 1
 
-        self.state.thread_info.active_threads.add(self.state.thread_info.current_thread_id)
+        logger.info("enter thread: %d -> %d",
+                    self.state.thread_info.prev_thread_id,
+                    self.state.thread_info.current_thread_id)
 
-        logger.debug("Thread 0x%X = ID %d", thread,
-                     self.state.thread_info.current_thread_id)
+        src_node = self.state.thread_info.cn
+
+        tmp = set(src_node)
+        tmp.add(self.state.thread_info.current_thread_id)
+        dest_node = frozenset(tmp)
+
+        self.state.thread_info.TG.add_edge(src_node, dest_node,
+                                           create=self.state.thread_info.current_thread_id)
+        self.state.thread_info.cn = dest_node
+
         self.state.mem[thread].uint64_t = self.state.thread_info.current_thread_id
+        self.call(start_routine, (arg,), 'dummy')
 
-        logger.debug("Thread %d -> %d" %
-                     (self.state.thread_info.prev_thread_id,
-                      self.state.thread_info.current_thread_id))
-        super(_pthread_create, self).run(newthread, attr, start_routine, arg)
-
+    def dummy(self, thread, attr, start_routine, arg):
         prev = self.state.thread_info.current_thread_id
         self.state.thread_info.current_thread_id = self.state.thread_info.prev_thread_id
         self.state.thread_info.prev_thread_id = prev
 
+        logger.info("leave thread: %d -> %d",
+                    self.state.thread_info.prev_thread_id,
+                    self.state.thread_info.current_thread_id)
+        self.ret(self.state.solver.BVV(0, self.state.arch.bits))
+
 class _pthread_join(angr.SimProcedure):
     def run(self, thread, retval):
-        logger.debug("Join %s", thread)
-        # Perform a deep copy of the active thread set and then remove the
-        # provided thread from it.
-        self.state.thread_info.active_threads = copy.deepcopy(self.state.thread_info.active_threads)
-        self.state.thread_info.active_threads.remove(self.state.solver.eval(thread.to_claripy()))
-        self.ret(0)
+        joined_id = self.state.solver.eval(thread.to_claripy())
+        logger.info("Join %d", joined_id)
+
+        src_node = self.state.thread_info.cn
+        tmp = set(src_node)
+        tmp.remove(joined_id)
+        dest_node = frozenset(tmp)
+
+        self.state.thread_info.TG.add_edge(src_node, dest_node, join=joined_id)
+        self.state.thread_info.cn = dest_node
 
 class _pthread_mutex_lock(angr.SimProcedure):
     """
@@ -155,9 +124,9 @@ def _mem_read_callback(state):
     length = state.inspect.mem_read_length
     logger.debug("Thread %d is reading from %s at %s" %
                 (state.thread_info.current_thread_id, from_addr, state.ip))
-    logger.debug("Thread %d Locks held = %s" %
-                 (state.thread_info.current_thread_id, state.thread_info.locks_held))
-    logger.debug("Active Threads = %s" % (state.thread_info.active_threads))
+    #logger.debug("Thread %d Locks held = %s" %
+    #             (state.thread_info.current_thread_id, state.thread_info.locks_held))
+    #logger.debug("Active Threads = %s" % (state.thread_info.active_threads))
 
     if int != type(from_addr):
         from_addr = state.solver.eval(from_addr)
@@ -166,19 +135,28 @@ def _mem_read_callback(state):
     if int != type(ip):
         ip = state.solver.eval(ip)
 
-    shad.add_access(from_addr, length, state.thread_info.current_thread_id, ip,
-                    READ, frozenset(state.thread_info.locks_held),
-                    frozenset(state.thread_info.active_threads))
+    for i in range(length):
+        addr = from_addr + i
+        access = (state.thread_info.current_thread_id, ip, addr, "read",
+                  frozenset(state.thread_info.locks_held), state.thread_info.cn)
+        if addr not in state.thread_info.accesses:
+            state.thread_info.accesses[addr] = set()
+        state.thread_info.accesses[addr].add(access)
+    #state.thread_info.accesses.add(access)
+
+    logger.info("thread=%d pc=0x%X addr=0x%X rw=r locks=%s tsn=%s",
+                state.thread_info.current_thread_id, ip, from_addr,
+                state.thread_info.locks_held, state.thread_info.cn)
 
 def _mem_write_callback(state):
     ip = state.ip
     to_addr = state.inspect.mem_write_address
     length = state.inspect.mem_write_length
-    logger.debug("Thread %d is writing from %s at %s" %
+    logger.debug("Thread %d is reading from %s at %s" %
                 (state.thread_info.current_thread_id, to_addr, state.ip))
-    logger.debug("Thread %d Locks held = %s" %
-                 (state.thread_info.current_thread_id, state.thread_info.locks_held))
-    logger.debug("Active Threads = %s" % (state.thread_info.active_threads))
+    #logger.debug("Thread %d Locks held = %s" %
+    #             (state.thread_info.current_thread_id, state.thread_info.locks_held))
+    #logger.debug("Active Threads = %s" % (state.thread_info.active_threads))
 
     if int != type(to_addr):
         to_addr = state.solver.eval(to_addr)
@@ -187,9 +165,49 @@ def _mem_write_callback(state):
     if int != type(ip):
         ip = state.solver.eval(ip)
 
-    shad.add_access(to_addr, length, state.thread_info.current_thread_id, ip,
-                    WRITE, frozenset(state.thread_info.locks_held),
-                    frozenset(state.thread_info.active_threads))
+    for i in range(length):
+        addr = to_addr+ i
+        access = (state.thread_info.current_thread_id, ip, addr, "write", frozenset(state.thread_info.locks_held), state.thread_info.cn)
+        if addr not in state.thread_info.accesses:
+            state.thread_info.accesses[addr] = set()
+        state.thread_info.accesses[addr].add(access)
+#    state.thread_info.accesses.add(access)
+
+    logger.info("thread=%d pc=0x%X addr=0x%X rw=w locks=%s tsn=%s",
+                state.thread_info.current_thread_id, ip, to_addr,
+                state.thread_info.locks_held, state.thread_info.cn)
+
+def find_create_edge_dest(G, t):
+    for _, d, attrs in G.edges(data=True):
+        if "create" in attrs and t == attrs["create"]:
+            return d
+    return None
+
+def reachable(G, c, tid, a):
+    if c == a[5]:
+        return True
+    path = nx.shortest_path(G, source=c, target=a[5])
+    for s, t in zip(path, path[1:]):
+        attrs = G.get_edge_data(s, t)
+        if "join" in attrs and tid == attrs["join"]:
+            return False
+        if t == a[5]:
+            return True
+    return False        
+
+def check(G, a1, a2):
+    c1 = None
+    c2 = None
+    if 0 != a1[0]:
+        c1 = find_create_edge_dest(G, a1[0])
+    if 0 != a2[0]:
+        c2 = find_create_edge_dest(G, a2[0])
+
+    if None != c2 and True == reachable(G, c2, a2[0], a1):
+        return True
+    if None != c1 and True == reachable(G, c1, a1[0], a2):
+        return True
+    return False
 
 class RaceFinder(angr.Analysis):
     """
@@ -230,7 +248,43 @@ class RaceFinder(angr.Analysis):
         simmgr.use_technique(angr.exploration_techniques.Spiller())
         simmgr.run()
 
-        shad.find_races(checked_ranges)
+        checked_ranges = set()
+        for section in self.project.loader.main_object.sections:
+            if section.name == ".data" or section.name == ".bss":
+                checked_ranges.add((section.vaddr, section.memsize))
+        
+        for st in simmgr.deadended:
+            for addr in st.thread_info.accesses.keys():
+                if True == min([addr < rng[0] or rng[0]+rng[1]-1 < addr for rng
+                                in checked_ranges]):
+                    continue
+        
+                #logger.info("Accesses for Address 0x%X", addr)
+                tmp = st.thread_info.accesses[addr]
+                combinations = itertools.combinations(st.thread_info.accesses[addr], 2)
+        
+                for combo in combinations:
+                    a0 = combo[0]
+                    a1 = combo[1]
+        
+                    if a0[0] == a1[0]:
+                        continue
+                    if a0[3] == "read" and a1[3] == "read":
+                        continue
+                    if len(a0[4].intersection(a1[4])) > 0:
+                        continue
+        
+        #                logger.info("thread=%d, pc=0x%X addr=0x%X rw=%s locks=%s tsn=%s",
+        #                           a0[0], a0[1], a0[2], a0[3], a0[4], a0[5])
+        #                logger.info("thread=%d, pc=0x%X addr=0x%X rw=%s locks=%s tsn=%s",
+        #                           a1[0], a1[1], a1[2], a1[3], a1[4], a1[5])
+                    result = check(st.thread_info.TG, a0, a1)
+                    if True == result:
+                        logger.info("possible race on 0x%X", addr)
+                        logger.info("thread=%d, pc=0x%X addr=0x%X rw=%s locks=%s tsn=%s",
+                            a0[0], a0[1], a0[2], a0[3], a0[4], a0[5])
+                        logger.info("thread=%d, pc=0x%X addr=0x%X rw=%s locks=%s tsn=%s",
+                            a1[0], a1[1], a1[2], a1[3], a1[4], a1[5])
 
         # Restore sim procedures
         self.project._sim_procedures = orig_hooks

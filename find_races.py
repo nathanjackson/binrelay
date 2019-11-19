@@ -20,4 +20,18 @@ if __name__ == "__main__":
 
     project = angr.Project(args.binary, auto_load_libs=False)
 
+    def test_ret(state):
+        logger.info("before %s", state.callstack)
+        #logger.info("return target %s", state.callstack.current_return_target)
+        state.callstack.ret()
+        state.ip = state.callstack.current_return_target
+        #logger.info("after %s", state.callstack)
+        #logger.info("return target %s", state.callstack.current_return_target)
+    def dummy(state):
+        pass
+
+    project.hook(0x4019b2, hook=test_ret)
+    project.hook(0x4012aa, length=0xD, hook=dummy)
+    project.hook(0x401266, length=0xD, hook=dummy)
+
     race_finder = project.analyses.RaceFinder()
