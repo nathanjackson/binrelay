@@ -73,9 +73,9 @@ class _pthread_create(angr.SimProcedure):
         self.state.thread_info.cn = dest_node
 
         self.state.mem[thread].uint64_t = self.state.thread_info.current_thread_id
-        self.call(start_routine, (arg,), 'dummy')
+        self.call(start_routine, (arg,), 'on_return')
 
-    def dummy(self, thread, attr, start_routine, arg):
+    def on_return(self, thread, attr, start_routine, arg):
         prev = self.state.thread_info.current_thread_id
         self.state.thread_info.current_thread_id = self.state.thread_info.prev_thread_id
         self.state.thread_info.prev_thread_id = prev
@@ -124,9 +124,6 @@ def _mem_read_callback(state):
     length = state.inspect.mem_read_length
     logger.debug("Thread %d is reading from %s at %s" %
                 (state.thread_info.current_thread_id, from_addr, state.ip))
-    #logger.debug("Thread %d Locks held = %s" %
-    #             (state.thread_info.current_thread_id, state.thread_info.locks_held))
-    #logger.debug("Active Threads = %s" % (state.thread_info.active_threads))
 
     if int != type(from_addr):
         from_addr = state.solver.eval(from_addr)
@@ -137,12 +134,11 @@ def _mem_read_callback(state):
 
     for i in range(length):
         addr = from_addr + i
-        access = (state.thread_info.current_thread_id, ip, addr, "read",
+        access = (state.thread_info.current_thread_id, ip, addr, READ,
                   frozenset(state.thread_info.locks_held), state.thread_info.cn)
         if addr not in state.thread_info.accesses:
             state.thread_info.accesses[addr] = set()
         state.thread_info.accesses[addr].add(access)
-    #state.thread_info.accesses.add(access)
 
     logger.info("thread=%d pc=0x%X addr=0x%X rw=r locks=%s tsn=%s",
                 state.thread_info.current_thread_id, ip, from_addr,
@@ -154,9 +150,6 @@ def _mem_write_callback(state):
     length = state.inspect.mem_write_length
     logger.debug("Thread %d is reading from %s at %s" %
                 (state.thread_info.current_thread_id, to_addr, state.ip))
-    #logger.debug("Thread %d Locks held = %s" %
-    #             (state.thread_info.current_thread_id, state.thread_info.locks_held))
-    #logger.debug("Active Threads = %s" % (state.thread_info.active_threads))
 
     if int != type(to_addr):
         to_addr = state.solver.eval(to_addr)
@@ -167,11 +160,10 @@ def _mem_write_callback(state):
 
     for i in range(length):
         addr = to_addr+ i
-        access = (state.thread_info.current_thread_id, ip, addr, "write", frozenset(state.thread_info.locks_held), state.thread_info.cn)
+        access = (state.thread_info.current_thread_id, ip, addr, WRITE, frozenset(state.thread_info.locks_held), state.thread_info.cn)
         if addr not in state.thread_info.accesses:
             state.thread_info.accesses[addr] = set()
         state.thread_info.accesses[addr].add(access)
-#    state.thread_info.accesses.add(access)
 
     logger.info("thread=%d pc=0x%X addr=0x%X rw=w locks=%s tsn=%s",
                 state.thread_info.current_thread_id, ip, to_addr,
@@ -259,7 +251,6 @@ class RaceFinder(angr.Analysis):
                                 in checked_ranges]):
                     continue
         
-                #logger.info("Accesses for Address 0x%X", addr)
                 tmp = st.thread_info.accesses[addr]
                 combinations = itertools.combinations(st.thread_info.accesses[addr], 2)
         
@@ -269,15 +260,11 @@ class RaceFinder(angr.Analysis):
         
                     if a0[0] == a1[0]:
                         continue
-                    if a0[3] == "read" and a1[3] == "read":
+                    if a0[3] == READ and a1[3] == READ:
                         continue
                     if len(a0[4].intersection(a1[4])) > 0:
                         continue
         
-        #                logger.info("thread=%d, pc=0x%X addr=0x%X rw=%s locks=%s tsn=%s",
-        #                           a0[0], a0[1], a0[2], a0[3], a0[4], a0[5])
-        #                logger.info("thread=%d, pc=0x%X addr=0x%X rw=%s locks=%s tsn=%s",
-        #                           a1[0], a1[1], a1[2], a1[3], a1[4], a1[5])
                     result = check(st.thread_info.TG, a0, a1)
                     if True == result:
                         logger.info("possible race on 0x%X", addr)
