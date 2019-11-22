@@ -244,6 +244,8 @@ class RaceFinder(angr.Analysis):
         for section in self.project.loader.main_object.sections:
             if section.name == ".data" or section.name == ".bss":
                 checked_ranges.add((section.vaddr, section.memsize))
+
+        logger.info(simmgr)
         
         for st in simmgr.deadended:
             for addr in st.thread_info.accesses.keys():
