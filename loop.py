@@ -4,7 +4,7 @@ import angr
 
 proj = angr.Project("loop.elf", auto_load_libs=False)
 
-cfg = proj.analyses.CFGEmulated()
+cfg = proj.analyses.CFGFast()
 
 loop_finder_result = proj.analyses.LoopFinder()
 
