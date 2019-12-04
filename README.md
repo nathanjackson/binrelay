@@ -34,5 +34,3 @@ these instructions to build the Juliet dataset and run BINRELAY against them.
     ```
     ./find_races.py juliet-cwe366/CWE366_Race_Condition_Within_Thread__global_int_01.out
     ```
-
-# Acknowledgments
