@@ -1,4 +1,4 @@
-# binrelay
+# BINRELAY
 
 BINRELAY is an open source tool for detecting race conditions inside binaries.
 It is built on top of [angr](http://angr.io/)'s concolic (static and dynamic)
