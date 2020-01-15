@@ -55,6 +55,7 @@ class _pthread_create(angr.SimProcedure):
         thread = self.state.solver.eval(nt)
 
         self.state.thread_info.prev_thread_id = self.state.thread_info.current_thread_id
+        self.state.mem[thread].uint64_t = self.state.thread_info.next_thread_id
         self.state.thread_info.current_thread_id = self.state.thread_info.next_thread_id
         self.state.thread_info.next_thread_id += 1
 
@@ -72,7 +73,6 @@ class _pthread_create(angr.SimProcedure):
                                            create=self.state.thread_info.current_thread_id)
         self.state.thread_info.cn = dest_node
 
-        self.state.mem[thread].uint64_t = self.state.thread_info.current_thread_id
         self.call(start_routine, (arg,), 'on_return')
 
     def on_return(self, thread, attr, start_routine, arg):
@@ -240,19 +240,8 @@ class RaceFinder(angr.Analysis):
         simmgr.use_technique(angr.exploration_techniques.Spiller())
         simmgr.run()
 
-        checked_ranges = set()
-        for section in self.project.loader.main_object.sections:
-            if section.name == ".data" or section.name == ".bss":
-                checked_ranges.add((section.vaddr, section.memsize))
-
-        logger.info(simmgr)
-        
         for st in simmgr.deadended:
             for addr in st.thread_info.accesses.keys():
-                if True == min([addr < rng[0] or rng[0]+rng[1]-1 < addr for rng
-                                in checked_ranges]):
-                    continue
-        
                 tmp = st.thread_info.accesses[addr]
                 combinations = itertools.combinations(st.thread_info.accesses[addr], 2)
         
