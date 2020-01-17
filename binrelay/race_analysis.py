@@ -62,6 +62,7 @@ class _pthread_create(angr.SimProcedure):
         logger.info("enter thread: %d -> %d",
                     self.state.thread_info.prev_thread_id,
                     self.state.thread_info.current_thread_id)
+        logger.info("PC = %s", self.state.regs.ip)
 
         src_node = self.state.thread_info.cn
 
@@ -125,6 +126,10 @@ def _mem_read_callback(state):
     logger.debug("Thread %d is reading from %s at %s" %
                 (state.thread_info.current_thread_id, from_addr, state.ip))
 
+    for simproc in state.project._sim_procedures.values():
+        if state.solver.eval(state.regs.ip) == simproc.addr:
+            return
+
     if int != type(from_addr):
         from_addr = state.solver.eval(from_addr)
     if int != type(length):
@@ -150,6 +155,10 @@ def _mem_write_callback(state):
     length = state.inspect.mem_write_length
     logger.debug("Thread %d is reading from %s at %s" %
                 (state.thread_info.current_thread_id, to_addr, state.ip))
+
+    for simproc in state.project._sim_procedures.values():
+        if state.solver.eval(state.regs.ip) == simproc.addr:
+            return
 
     if int != type(to_addr):
         to_addr = state.solver.eval(to_addr)
