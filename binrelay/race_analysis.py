@@ -206,7 +206,7 @@ class RaceFinder(angr.Analysis):
     RaceFinder is the point of this entire project!
     """
 
-    def __init__(self):
+    def __init__(self, state=None):
         # Save off the SimProcedures so they can be restored post-analysis.
         orig_hooks = copy.deepcopy(self.project._sim_procedures)
 
@@ -225,7 +225,8 @@ class RaceFinder(angr.Analysis):
         for section in self.project.loader.main_object.sections:
             if section.name == ".data" or section.name == ".bss":
                 checked_ranges.add((section.vaddr, section.memsize))
-        state = self.project.factory.entry_state()
+        if None == state:
+            state = self.project.factory.entry_state()
         state.register_plugin("thread_info", ThreadInfoPlugin())
 
         # Setup breakpoints for memory accesses
@@ -237,7 +238,7 @@ class RaceFinder(angr.Analysis):
         simmgr = self.project.factory.simulation_manager(state)
         # XXX: We probably don't want to use LoopSeer because we need to be
         # able to execute the loop bodies to see their reads and writes.
-        simmgr.use_technique(angr.exploration_techniques.Spiller())
+        #simmgr.use_technique(angr.exploration_techniques.Spiller())
         simmgr.run()
 
         checked_ranges = set()
@@ -246,12 +247,16 @@ class RaceFinder(angr.Analysis):
                 checked_ranges.add((section.vaddr, section.memsize))
 
         logger.info(simmgr)
+
+        for err_state in simmgr.errored:
+            print(err_state)
+            print(err_state.callstack)
         
         for st in simmgr.deadended:
             for addr in st.thread_info.accesses.keys():
-                if True == min([addr < rng[0] or rng[0]+rng[1]-1 < addr for rng
-                                in checked_ranges]):
-                    continue
+                #if True == min([addr < rng[0] or rng[0]+rng[1]-1 < addr for rng
+                #                in checked_ranges]):
+                #    continue
         
                 tmp = st.thread_info.accesses[addr]
                 combinations = itertools.combinations(st.thread_info.accesses[addr], 2)
