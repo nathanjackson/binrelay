@@ -14,6 +14,7 @@ logger.setLevel(logging.INFO)
 READ = "read"
 WRITE = "write"
 
+
 class ThreadInfoPlugin(angr.SimStatePlugin):
     def __init__(self):
         super(ThreadInfoPlugin, self).__init__()
@@ -45,6 +46,7 @@ class ThreadInfoPlugin(angr.SimStatePlugin):
 
         result.accesses = copy.deepcopy(self.accesses)
         return result
+
 
 class _pthread_create(angr.SimProcedure):
     """
@@ -85,6 +87,7 @@ class _pthread_create(angr.SimProcedure):
                     self.state.thread_info.current_thread_id)
         self.ret(self.state.solver.BVV(0, self.state.arch.bits))
 
+
 class _pthread_join(angr.SimProcedure):
     def run(self, thread, retval):
         joined_id = self.state.solver.eval(thread.to_claripy())
@@ -98,32 +101,37 @@ class _pthread_join(angr.SimProcedure):
         self.state.thread_info.TG.add_edge(src_node, dest_node, join=joined_id)
         self.state.thread_info.cn = dest_node
 
+
 class _pthread_mutex_lock(angr.SimProcedure):
     """
     A simprocedure that is executed when a lock (mutex) is taken.
     """
+
     def run(self, mutex):
         logger.debug("Thread %d is locking mutex @ %s" %
-                    (self.state.thread_info.current_thread_id, mutex))
+                     (self.state.thread_info.current_thread_id, mutex))
         mutex_address = self.state.solver.eval(mutex.to_claripy())
         self.state.thread_info.locks_held.add(mutex_address)
+
 
 class _pthread_mutex_unlock(angr.SimProcedure):
     """
     A simprocedure that is executed when a lock (mutex) is released.
     """
+
     def run(self, mutex):
         logger.debug("Thread %d is releasing mutex @ %s" %
-                    (self.state.thread_info.current_thread_id, mutex))
+                     (self.state.thread_info.current_thread_id, mutex))
         mutex_address = self.state.solver.eval(mutex.to_claripy())
         self.state.thread_info.locks_held.remove(mutex_address)
+
 
 def _mem_read_callback(state):
     ip = state.ip
     from_addr = state.inspect.mem_read_address
     length = state.inspect.mem_read_length
     logger.debug("Thread %d is reading from %s at %s" %
-                (state.thread_info.current_thread_id, from_addr, state.ip))
+                 (state.thread_info.current_thread_id, from_addr, state.ip))
 
     if int != type(from_addr):
         from_addr = state.solver.eval(from_addr)
@@ -144,12 +152,13 @@ def _mem_read_callback(state):
                 state.thread_info.current_thread_id, ip, from_addr,
                 state.thread_info.locks_held, state.thread_info.cn)
 
+
 def _mem_write_callback(state):
     ip = state.ip
     to_addr = state.inspect.mem_write_address
     length = state.inspect.mem_write_length
     logger.debug("Thread %d is reading from %s at %s" %
-                (state.thread_info.current_thread_id, to_addr, state.ip))
+                 (state.thread_info.current_thread_id, to_addr, state.ip))
 
     if int != type(to_addr):
         to_addr = state.solver.eval(to_addr)
@@ -159,8 +168,9 @@ def _mem_write_callback(state):
         ip = state.solver.eval(ip)
 
     for i in range(length):
-        addr = to_addr+ i
-        access = (state.thread_info.current_thread_id, ip, addr, WRITE, frozenset(state.thread_info.locks_held), state.thread_info.cn)
+        addr = to_addr + i
+        access = (state.thread_info.current_thread_id, ip, addr, WRITE,
+                  frozenset(state.thread_info.locks_held), state.thread_info.cn)
         if addr not in state.thread_info.accesses:
             state.thread_info.accesses[addr] = set()
         state.thread_info.accesses[addr].add(access)
@@ -169,11 +179,13 @@ def _mem_write_callback(state):
                 state.thread_info.current_thread_id, ip, to_addr,
                 state.thread_info.locks_held, state.thread_info.cn)
 
+
 def find_create_edge_dest(G, t):
     for _, d, attrs in G.edges(data=True):
         if "create" in attrs and t == attrs["create"]:
             return d
     return None
+
 
 def reachable(G, c, tid, a):
     if c == a[5]:
@@ -185,7 +197,8 @@ def reachable(G, c, tid, a):
             return False
         if t == a[5]:
             return True
-    return False        
+    return False
+
 
 def check(G, a1, a2):
     c1 = None
@@ -201,12 +214,13 @@ def check(G, a1, a2):
         return True
     return False
 
+
 class RaceFinder(angr.Analysis):
     """
     RaceFinder is the point of this entire project!
     """
 
-    def __init__(self):
+    def __init__(self, initial_state=None):
         # Save off the SimProcedures so they can be restored post-analysis.
         orig_hooks = copy.deepcopy(self.project._sim_procedures)
 
@@ -225,16 +239,18 @@ class RaceFinder(angr.Analysis):
         for section in self.project.loader.main_object.sections:
             if section.name == ".data" or section.name == ".bss":
                 checked_ranges.add((section.vaddr, section.memsize))
-        state = self.project.factory.entry_state()
-        state.register_plugin("thread_info", ThreadInfoPlugin())
+
+        if None == initial_state:
+            initial_state = self.project.factory.entry_state()
+        initial_state.register_plugin("thread_info", ThreadInfoPlugin())
 
         # Setup breakpoints for memory accesses
-        state.inspect.b("mem_read", when=angr.BP_AFTER,
-                        action=_mem_read_callback)
-        state.inspect.b("mem_write", when=angr.BP_AFTER,
-                        action=_mem_write_callback)
+        initial_state.inspect.b("mem_read", when=angr.BP_AFTER,
+                                action=_mem_read_callback)
+        initial_state.inspect.b("mem_write", when=angr.BP_AFTER,
+                                action=_mem_write_callback)
 
-        simmgr = self.project.factory.simulation_manager(state)
+        simmgr = self.project.factory.simulation_manager(initial_state)
         # XXX: We probably don't want to use LoopSeer because we need to be
         # able to execute the loop bodies to see their reads and writes.
         simmgr.use_technique(angr.exploration_techniques.Spiller())
@@ -246,37 +262,38 @@ class RaceFinder(angr.Analysis):
                 checked_ranges.add((section.vaddr, section.memsize))
 
         logger.info(simmgr)
-        
+
         for st in simmgr.deadended:
             for addr in st.thread_info.accesses.keys():
                 if True == min([addr < rng[0] or rng[0]+rng[1]-1 < addr for rng
                                 in checked_ranges]):
                     continue
-        
-                tmp = st.thread_info.accesses[addr]
-                combinations = itertools.combinations(st.thread_info.accesses[addr], 2)
-        
+
+                combinations = itertools.combinations(
+                    st.thread_info.accesses[addr], 2)
+
                 for combo in combinations:
                     a0 = combo[0]
                     a1 = combo[1]
-        
+
                     if a0[0] == a1[0]:
                         continue
                     if a0[3] == READ and a1[3] == READ:
                         continue
                     if len(a0[4].intersection(a1[4])) > 0:
                         continue
-        
+
                     result = check(st.thread_info.TG, a0, a1)
                     if True == result:
                         logger.info("possible race on 0x%X", addr)
                         logger.info("thread=%d, pc=0x%X addr=0x%X rw=%s locks=%s tsn=%s",
-                            a0[0], a0[1], a0[2], a0[3], a0[4], a0[5])
+                                    a0[0], a0[1], a0[2], a0[3], a0[4], a0[5])
                         logger.info("thread=%d, pc=0x%X addr=0x%X rw=%s locks=%s tsn=%s",
-                            a1[0], a1[1], a1[2], a1[3], a1[4], a1[5])
+                                    a1[0], a1[1], a1[2], a1[3], a1[4], a1[5])
 
         # Restore sim procedures
         self.project._sim_procedures = orig_hooks
+
 
 # Register the RaceFinder with angr.
 angr.AnalysesHub.register_default("RaceFinder", RaceFinder)
