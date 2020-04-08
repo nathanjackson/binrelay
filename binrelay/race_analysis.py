@@ -60,9 +60,9 @@ class _pthread_create(angr.SimProcedure):
         self.state.thread_info.current_thread_id = self.state.thread_info.next_thread_id
         self.state.thread_info.next_thread_id += 1
 
-        logger.info("enter thread: %d -> %d",
-                    self.state.thread_info.prev_thread_id,
-                    self.state.thread_info.current_thread_id)
+        logger.debug("enter thread: %d -> %d",
+                     self.state.thread_info.prev_thread_id,
+                     self.state.thread_info.current_thread_id)
 
         src_node = self.state.thread_info.cn
 
@@ -82,16 +82,16 @@ class _pthread_create(angr.SimProcedure):
         self.state.thread_info.current_thread_id = self.state.thread_info.prev_thread_id
         self.state.thread_info.prev_thread_id = prev
 
-        logger.info("leave thread: %d -> %d",
-                    self.state.thread_info.prev_thread_id,
-                    self.state.thread_info.current_thread_id)
+        logger.debug("leave thread: %d -> %d",
+                     self.state.thread_info.prev_thread_id,
+                     self.state.thread_info.current_thread_id)
         self.ret(self.state.solver.BVV(0, self.state.arch.bits))
 
 
 class _pthread_join(angr.SimProcedure):
     def run(self, thread, retval):
         joined_id = self.state.solver.eval(thread.to_claripy())
-        logger.info("Join %d", joined_id)
+        logger.debug("Join %d", joined_id)
 
         src_node = self.state.thread_info.cn
         tmp = set(src_node)
@@ -148,9 +148,9 @@ def _mem_read_callback(state):
             state.thread_info.accesses[addr] = set()
         state.thread_info.accesses[addr].add(access)
 
-    logger.info("thread=%d pc=0x%X addr=0x%X rw=r locks=%s tsn=%s",
-                state.thread_info.current_thread_id, ip, from_addr,
-                state.thread_info.locks_held, state.thread_info.cn)
+    logger.debug("thread=%d pc=0x%X addr=0x%X rw=r locks=%s tsn=%s",
+                 state.thread_info.current_thread_id, ip, from_addr,
+                 state.thread_info.locks_held, state.thread_info.cn)
 
 
 def _mem_write_callback(state):
@@ -175,9 +175,9 @@ def _mem_write_callback(state):
             state.thread_info.accesses[addr] = set()
         state.thread_info.accesses[addr].add(access)
 
-    logger.info("thread=%d pc=0x%X addr=0x%X rw=w locks=%s tsn=%s",
-                state.thread_info.current_thread_id, ip, to_addr,
-                state.thread_info.locks_held, state.thread_info.cn)
+    logger.debug("thread=%d pc=0x%X addr=0x%X rw=w locks=%s tsn=%s",
+                 state.thread_info.current_thread_id, ip, to_addr,
+                 state.thread_info.locks_held, state.thread_info.cn)
 
 
 def find_create_edge_dest(G, t):
@@ -254,7 +254,9 @@ class RaceFinder(angr.Analysis):
         # XXX: We probably don't want to use LoopSeer because we need to be
         # able to execute the loop bodies to see their reads and writes.
         simmgr.use_technique(angr.exploration_techniques.Spiller())
+        logger.info("Starting symbolic execution")
         simmgr.run()
+        logger.info("Symbolic execution terminated")
 
         checked_ranges = set()
         for section in self.project.loader.main_object.sections:
@@ -262,6 +264,8 @@ class RaceFinder(angr.Analysis):
                 checked_ranges.add((section.vaddr, section.memsize))
 
         logger.info(simmgr)
+
+        logger.info("Checking for race conditions")
 
         for st in simmgr.deadended:
             for addr in st.thread_info.accesses.keys():
@@ -290,6 +294,8 @@ class RaceFinder(angr.Analysis):
                                     a0[0], a0[1], a0[2], a0[3], a0[4], a0[5])
                         logger.info("thread=%d, pc=0x%X addr=0x%X rw=%s locks=%s tsn=%s",
                                     a1[0], a1[1], a1[2], a1[3], a1[4], a1[5])
+
+        logger.info("Race Analysis Complete")
 
         # Restore sim procedures
         self.project._sim_procedures = orig_hooks
