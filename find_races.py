@@ -17,6 +17,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(
         description="Find race conditions on a given binary.")
     ap.add_argument("binary", help="the binary to analyze")
+    ap.add_argument("-u", "--unicorn", action="store_true",
+                    default=False, help="Use the unicorn engine")
+    ap.add_argument("-l", "--loop-hooks", action="store_true",
+                    default=False, help="Use loop hooks")
     args = ap.parse_args()
 
     logger.info("Finding races in %s" % (args.binary))
@@ -24,6 +28,8 @@ if __name__ == "__main__":
     project = angr.Project(args.binary, auto_load_libs=False)
 
     binrelay.utils.hook_pthread_exit(project)
+    if True == args.loop_hooks:
+        binrelay.utils.hook_loops(project)
 
     arg_size = project.arch.byte_width * MAX_ARG_BYTES
 
@@ -37,5 +43,8 @@ if __name__ == "__main__":
         claripy.BVS("arg6", arg_size)
     ]
     state = project.factory.entry_state(args=analysis_args)
+    if True == args.unicorn:
+        for opt in angr.options.unicorn:
+            state.options.add(opt)
 
     race_finder = project.analyses.RaceFinder(initial_state=state)
