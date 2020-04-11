@@ -6,9 +6,13 @@
 
 int foo;
 
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
 void *thread_body()
 {
+    pthread_mutex_lock(&mutex);
     foo += 1;
+    pthread_mutex_unlock(&mutex);
 }
 
 int main(int argc, char **argv)
