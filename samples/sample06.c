@@ -4,14 +4,14 @@
 
 #include <pthread.h>
 
-int foo;
+int foo; // Expecting 3 races: 2x Read-Write, 1x Write-Write
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void *thread_body()
 {
     pthread_mutex_lock(&mutex);
-    foo += 1;
+    foo += 1; // Read and Write
     pthread_mutex_unlock(&mutex);
 }
 
@@ -35,7 +35,7 @@ int main(int argc, char **argv)
         pthread_create(&thread, NULL, thread_body, NULL);
         for (int i = 0; i < 100; i++)
         {
-            foo += 1;
+            foo += 1; // Read and Write
         }
         pthread_join(thread, NULL);
     }

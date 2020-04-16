@@ -3,11 +3,11 @@
 
 #include <pthread.h>
 
-int foo;
+int foo; // Expecting 3 races: 2x Read-Write, 1x Write-Write
 
 void *thread_body()
 {
-    foo += 1;
+    foo += 1; // Read and Write
 }
 
 int main(int argc, char **argv)
@@ -28,7 +28,7 @@ int main(int argc, char **argv)
     number = atoi(argv[1]);
 
     pthread_create(&thread, NULL, thread_body, NULL);
-    foo += number;
+    foo += number; // Read and write
     pthread_join(thread, NULL);
 
     return result;
