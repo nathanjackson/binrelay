@@ -30,7 +30,6 @@ class ThreadInfoPlugin(angr.SimStatePlugin):
         self.locks_held = set()
 
         self.accesses = {}
-        #self.accesses = set()
 
     @angr.SimStatePlugin.memo
     def copy(self, memo):
@@ -251,8 +250,6 @@ class RaceFinder(angr.Analysis):
                                 action=_mem_write_callback)
 
         simmgr = self.project.factory.simulation_manager(initial_state)
-        # XXX: We probably don't want to use LoopSeer because we need to be
-        # able to execute the loop bodies to see their reads and writes.
         simmgr.use_technique(angr.exploration_techniques.Spiller())
         logger.info("Starting symbolic execution")
         simmgr.run()

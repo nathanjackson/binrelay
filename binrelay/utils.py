@@ -5,13 +5,15 @@ import angr
 logger = logging.getLogger(name=__name__)
 logger.setLevel(logging.DEBUG)
 
+
 class pthread_exit(angr.SimProcedure):
     """
     Simulates pthread_exit by performing a no-op.
     """
-    #NO_RET = True
+
     def run(self, exit_code):
         self.ret()
+
 
 class loop_hook(object):
     def __init__(self, dest_addr):
@@ -29,20 +31,9 @@ class loop_hook(object):
 
         self.hit_count_for_tid[state.thread_info.current_thread_id] += 1
 
+
 def hook_loops(proj, max_iters=10):
-
-#    def mk_hook(dest_addr):
-#        hit_count = 0
-#        def loop_hook(state):
-#            nonlocal hit_count
-#            if hit_count >= max_iters:
-#                state.ip = dest_addr
-#                logger.debug("tid = %d jumping out of loop, ip = %s" %
-#                             (state.thread_info.current_thread_id, state.ip))
-#            hit_count += 1
-#        return loop_hook
-
-    cfg = proj.analyses.CFGFast()
+    proj.analyses.CFGFast()
 
     loop_finder_result = proj.analyses.LoopFinder()
 
@@ -52,12 +43,13 @@ def hook_loops(proj, max_iters=10):
         src_block = proj.factory.block(edge[0].addr)
         jmp_out_addr = src_block.instruction_addrs[-1]
         logger.debug("jump out addr = 0x%X" % (jmp_out_addr))
-        #proj.hook(jmp_out_addr, hook=mk_hook(edge[1].addr))
         proj.hook(jmp_out_addr, hook=loop_hook(edge[1].addr))
+
 
 def pthread_exit_hook(state):
     state.callstack.ret()
     state.ip = state.callstack.current_return_target
+
 
 def hook_pthread_exit(proj):
     cfg = proj.analyses.CFGFast()
