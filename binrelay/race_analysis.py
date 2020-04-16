@@ -220,7 +220,7 @@ class RaceFinder(angr.Analysis):
     RaceFinder is the point of this entire project!
     """
 
-    def __init__(self, initial_state=None):
+    def __init__(self, initial_state=None, disable_global_filter=False):
         # Save off the SimProcedures so they can be restored post-analysis.
         orig_hooks = copy.deepcopy(self.project._sim_procedures)
 
@@ -267,10 +267,12 @@ class RaceFinder(angr.Analysis):
 
         logger.info("Checking for race conditions")
 
+        races = set()
+
         for st in simmgr.deadended:
             for addr in st.thread_info.accesses.keys():
-                if True == min([addr < rng[0] or rng[0]+rng[1]-1 < addr for rng
-                                in checked_ranges]):
+                if False == disable_global_filter and True == min([addr < rng[0] or rng[0]+rng[1]-1 < addr for rng
+                                                                   in checked_ranges]):
                     continue
 
                 combinations = itertools.combinations(
@@ -289,12 +291,16 @@ class RaceFinder(angr.Analysis):
 
                     result = check(st.thread_info.TG, a0, a1)
                     if True == result:
-                        logger.info("possible race on 0x%X", addr)
-                        logger.info("thread=%d, pc=0x%X addr=0x%X rw=%s locks=%s tsn=%s",
-                                    a0[0], a0[1], a0[2], a0[3], a0[4], a0[5])
-                        logger.info("thread=%d, pc=0x%X addr=0x%X rw=%s locks=%s tsn=%s",
-                                    a1[0], a1[1], a1[2], a1[3], a1[4], a1[5])
+                        logger.debug("possible race on 0x%X", addr)
+                        logger.debug("thread=%d, pc=0x%X addr=0x%X rw=%s locks=%s tsn=%s",
+                                     a0[0], a0[1], a0[2], a0[3], a0[4], a0[5])
+                        logger.debug("thread=%d, pc=0x%X addr=0x%X rw=%s locks=%s tsn=%s",
+                                     a1[0], a1[1], a1[2], a1[3], a1[4], a1[5])
+                        race = tuple(sorted([a0[1], a1[1]]))
+                        races.add(race)
 
+        for race in races:
+            logger.info("possible race: (0x%X, 0x%X)", race[0], race[1])
         logger.info("Race Analysis Complete")
 
         # Restore sim procedures
